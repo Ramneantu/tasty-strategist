@@ -204,7 +204,7 @@ class TTApi:
         return response
 
     def get_equity_options(self, symbol) -> any:
-        response = self.__get(f"/option-chains/{symbol}/nested")
+        response = self.__get(f"/option-chains/{symbol}/compact")
         return response
 
     def get_public_watchlists(self) -> any:
