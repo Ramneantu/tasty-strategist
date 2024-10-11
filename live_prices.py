@@ -62,10 +62,10 @@ async def main():
     session = Session(config.username, config.password, is_test=not config.use_prod)
     
     options = [
-        TTOption('SPXW', '241018', TTOptionSide.CALL, 5650),
-        TTOption('SPXW', '241018', TTOptionSide.CALL, 5750),
-        TTOption('SPXW', '241018', TTOptionSide.CALL, 5850),
-        TTOption('SPXW', '241018', TTOptionSide.CALL, 5950)
+        TTOption('SPXW', '241011', TTOptionSide.CALL, 5650),
+        TTOption('SPXW', '241011', TTOptionSide.CALL, 5750),
+        TTOption('SPXW', '241011', TTOptionSide.CALL, 5850),
+        TTOption('SPXW', '241011', TTOptionSide.CALL, 5950)
     ]
     symbols = [option.symbol for option in options]
 
@@ -78,6 +78,8 @@ async def main():
             print(f'Price of {symbol} is {live_price_streamer.quotes[symbol].askPrice}')
         print('==============================')
         await asyncio.sleep(1)
+        print(f'Event queue size: {live_price_streamer.streamer._queues[EventType.QUOTE].qsize()}') # Nu mai actualizeaza aici. Nu inteleg de ce...
+        print('==============================')
 
     await live_price_streamer.close_channel()
         
