@@ -3,6 +3,7 @@ TastyBot.config
 logs/
 lib/__pycache__/
 *.ipynb
+data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
