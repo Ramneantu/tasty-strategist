@@ -224,7 +224,7 @@ class TTApi:
             return False
 
         response = self.__post(
-            f'/accounts/{self.user_data["accounts"][0]["account"]["account-number"]}/orders/dry-run',
+            f'/accounts/{self.user_data["accounts"][0]["account-number"]}/orders/dry-run',
             body=order.build_order(),
         )
 
