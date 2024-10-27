@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from dataclasses import dataclass
 
 class TTOrderType(Enum):
   LIMIT = 'Limit'
@@ -39,6 +40,7 @@ class TTOptionSide(Enum):
   PUT = 'P'
   CALL = 'C'
 
+@dataclass(frozen=True)
 class TTOption:
   symbol: str = None
 

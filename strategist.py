@@ -96,6 +96,16 @@ class Strategist:
         print(f'Adding insurance options to live prices: {self.call_to_buy.streamer_symbol}, {self.put_to_buy.streamer_symbol}')
         await self.live_prices.add_symbols([self.call_to_buy.streamer_symbol, self.put_to_buy.streamer_symbol])
 
+
+    def winnings(self):
+        return (
+            -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
+            +self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
+            +self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
+            -self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
+        ) * 100
+
+
     def show_stategy(self):
         print('====================')
         print('>>>>> STRATEGY <<<<<')
@@ -103,13 +113,8 @@ class Strategist:
         print(f'Sell {self.put_to_sell.streamer_symbol} for {self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice}')
         print(f'Sell {self.call_to_sell.streamer_symbol} for {self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice}')
         print(f'Buy {self.call_to_buy.streamer_symbol} for {self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice}')
-        pocket = (
-            -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
-            +self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
-            +self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
-            -self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
-        ) * 100
-        print(f'-->> We pocket ${pocket}')
+
+        print(f'-->> We pocket ${self.winnings}')
         print('====================')
 
         
