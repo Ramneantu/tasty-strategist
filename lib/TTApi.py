@@ -218,18 +218,70 @@ class TTApi:
             response = self.__get(f"/watchlists/{watchlist}")
         return response
 
-    def simple_order(self, order: TTOrder = None) -> bool:
+    def simple_order(self, order: TTOrder = None):
         if order is None:
-            print(f"You need to supply an order.")
-            return False
+            raise ValueError("You need to supply an order.")
 
+        # print(f'Order: {order.build_order()}')
         response = self.__post(
             f'/accounts/{self.user_data["accounts"][0]["account-number"]}/orders/dry-run',
             body=order.build_order(),
         )
 
-        if response is None:
-            return False
+        if response is None or "data" not in response:
+            raise Exception("Order submission failed. Invalid response from the API.")
 
         print(json.dumps(response))
-        return True
+        return response["data"]
+    
+    def fetch_account_balance(self):
+        """Fetches the balance details for the specified account."""
+        url = f"{self.tt_uri}/accounts/{self.user_data["accounts"][0]["account-number"]}/balances"
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code == 200:
+            balance_data = response.json().get("data", {})
+            return {
+                "cash_balance": balance_data.get("cash-balance"),
+                "net_liquidating_value": balance_data.get("net-liquidating-value"),
+                "equity_buying_power": balance_data.get("equity-buying-power"),
+                "cash_available_to_withdraw": balance_data.get("cash-available-to-withdraw")
+            }
+        else:
+            print(f"Failed to retrieve balance data: {response.status_code}")
+            return None
+        
+    def fetch_open_orders(self):
+        """Fetches all open orders for the specified account."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+        response = self.__get(f'/accounts/{account_number}/orders')
+        
+        if response and "data" in response:
+            return response["data"]["items"]
+        else:
+            raise Exception("Failed to retrieve open orders.")
+        
+    def cancel_order(self, order_id):
+        """Cancels an order by its ID."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+        response = self.__delete(f'/accounts/{account_number}/orders/{order_id}')
+        
+        if response and response.get("status") == "canceled":
+            print(f"Order {order_id} canceled successfully.")
+            return True
+        else:
+            raise Exception(f"Failed to cancel order {order_id}.")
+        
+    def clear_all_orders(self):
+        """Cancels all open orders for the account before placing a new one."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+
+        # Fetch open orders
+        open_orders = self.fetch_open_orders(account_number)
+        
+        # Cancel each open order
+        for order in open_orders:
+            try:
+                self.cancel_order(account_number, order["order-id"])
+            except Exception as e:
+                print(f"Error canceling order {order['order-id']}: {e}")
