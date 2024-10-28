@@ -40,7 +40,6 @@ class TTOptionSide(Enum):
   PUT = 'P'
   CALL = 'C'
 
-@dataclass(frozen=True)
 class TTOption:
   symbol: str = None
 

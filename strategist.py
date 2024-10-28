@@ -114,7 +114,7 @@ class Strategist:
         print(f'Sell {self.call_to_sell.streamer_symbol} for {self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice}')
         print(f'Buy {self.call_to_buy.streamer_symbol} for {self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice}')
 
-        print(f'-->> We pocket ${self.winnings}')
+        print(f'-->> We pocket ${self.winnings()}')
         print('====================')
 
         
