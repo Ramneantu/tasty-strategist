@@ -40,12 +40,18 @@ class Strategist:
 
         self = cls(live_prices, underlying_streamer_symbol, options_interval, reference_price, [])
 
-        await self._build_options_around(session)
+        # Start the continuous build options loop
+        asyncio.create_task(self.run_build_options_loop(session))
 
         return self
 
+    async def run_build_options_loop(self, session: Session, interval: int = 1):
+        while True:
+            await self._build_options_around(session)
+            await asyncio.sleep(interval)
 
     async def _build_options_around(self, session: Session, search_interval: int = 50, price_threshold: float = 3.5, insurance_offset: int = 30):
+        print(f'DEBUG: running updates')
         today = date.today()
         dd = str(today.day)
         mm = str(today.month)
@@ -60,7 +66,8 @@ class Strategist:
 
         lower_options = await TastytradeWrapper.get_options(session, lower_tt_options)
         higher_options = await TastytradeWrapper.get_options(session, higher_tt_options)
-        # Options return in ascending order of strike price. We want them in descending order of premium
+        
+        # Sorting and filtering logic
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
         higher_options.sort(key=lambda o: o.strike_price, reverse=False)
 
@@ -69,72 +76,73 @@ class Strategist:
 
         await self.live_prices.add_symbols(lower_streamer_symbols + higher_streamer_symbols)
 
+        # Logic for selecting put and call options based on the price threshold
         for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             if price < price_threshold:
-                print(f'Price {price} OK for PUT at {option.strike_price}')
                 self.put_to_sell = option
                 insurance_strike_price = option.strike_price - insurance_offset
                 tt_put_to_buy = TTOption('SPXW', exp_date, TTOptionSide.PUT, insurance_strike_price)
                 self.put_to_buy = await Option.a_get_option(session, tt_put_to_buy.symbol)
                 break
-            else:
-                print(f'Price {price} too high for PUT at {option.strike_price}')
 
         for option in higher_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             if price < price_threshold:
-                print(f'Price {price} OK for CALL at {option.strike_price}')
                 self.call_to_sell = option
                 insurance_strike_price = option.strike_price + insurance_offset
                 tt_call_to_buy = TTOption('SPXW', exp_date, TTOptionSide.CALL, insurance_strike_price)
                 self.call_to_buy = await Option.a_get_option(session, tt_call_to_buy.symbol)
                 break
-            else:
-                print(f'Price {price} too high for CALL at {option.strike_price}')
 
-        print(f'Adding insurance options to live prices: {self.call_to_buy.streamer_symbol}, {self.put_to_buy.streamer_symbol}')
         await self.live_prices.add_symbols([self.call_to_buy.streamer_symbol, self.put_to_buy.streamer_symbol])
-
 
     def winnings(self):
         return (
             -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
-            +self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
-            +self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
-            -self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
+            + self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
+            + self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
+            - self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
         ) * 100
 
-
-    def show_stategy(self):
+    def show_strategy(self):
+        legs_are_available = self.put_to_buy is not None and \
+            self.put_to_sell is not None and \
+            self.call_to_sell is not None and \
+            self.call_to_buy is not None
+        leg_prices_are_available = legs_are_available and self.put_to_buy.streamer_symbol in self.live_prices.quotes and \
+            self.put_to_sell.streamer_symbol in self.live_prices.quotes and \
+            self.call_to_sell.streamer_symbol in self.live_prices.quotes and \
+            self.call_to_buy.streamer_symbol in self.live_prices.quotes
+        if not legs_are_available or not leg_prices_are_available:
+            print('Wait strategy.')
+            return
+        
         print('====================')
         print('>>>>> STRATEGY <<<<<')
-        print(f'Buy {self.put_to_buy.streamer_symbol} for {self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice}')
-        print(f'Sell {self.put_to_sell.streamer_symbol} for {self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice}')
-        print(f'Sell {self.call_to_sell.streamer_symbol} for {self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice}')
-        print(f'Buy {self.call_to_buy.streamer_symbol} for {self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice}')
-
+        print(f'Buy {self.put_to_buy.symbol} for {self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice}')
+        print(f'Sell {self.put_to_sell.symbol} for {self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice}')
+        print(f'Sell {self.call_to_sell.symbol} for {self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice}')
+        print(f'Buy {self.call_to_buy.symbol} for {self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice}')
         print(f'-->> We pocket ${self.winnings()}')
         print('====================')
 
-        
+
 async def main():
     config = TTConfig()
     session = Session(config.username, config.password, is_test=not config.use_prod)
 
     strategist = await Strategist.create(session, 'SPX', 5)
 
-    strategist.show_stategy()
+    try:
+        while True:
+            strategist.show_strategy()
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        print("Stopping strategy display loop.")
+    finally:
+        await strategist.live_prices.close_channel()
+        session.destroy()
 
-    await strategist.live_prices.close_channel()
-
-    session.destroy()
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     asyncio.run(main())
-        
-
-        
-
-
