@@ -1,16 +1,13 @@
+import tkinter as tk
 import asyncio
+import threading
 from datetime import date
 from dataclasses import dataclass
 
-from tastytrade import DXLinkStreamer
-from tastytrade.dxfeed import Greeks, Quote
-from tastytrade import Session, Account
-from tastytrade.instruments import Option, Equity
-
+from tastytrade import Session
+from tastytrade.instruments import Option
 from lib import TTConfig, TTOption, TTOptionSide
-
 from live_prices import LivePrices, TastytradeWrapper
-
 
 @dataclass
 class Strategist:
@@ -18,11 +15,10 @@ class Strategist:
     underlying_streamer_symbol: str
     options_interval: int
     reference_price: float
-    options_streamer_symbols: list[str]
-    put_to_sell: Option | None = None
-    put_to_buy: Option | None = None
-    call_to_sell: Option | None = None
-    call_to_buy: Option | None = None
+    put_to_sell: Option = None
+    put_to_buy: Option = None
+    call_to_sell: Option = None
+    call_to_buy: Option = None
 
     @classmethod
     async def create(
@@ -38,45 +34,34 @@ class Strategist:
         reference_price = (live_prices.quotes[underlying_streamer_symbol].bidPrice + live_prices.quotes[underlying_streamer_symbol].askPrice) / 2
         print(f'{underlying_streamer_symbol} is at {reference_price}')
 
-        self = cls(live_prices, underlying_streamer_symbol, options_interval, reference_price, [])
-
-        # Start the continuous build options loop
-        asyncio.create_task(self.run_build_options_loop(session))
-
+        self = cls(live_prices, underlying_streamer_symbol, options_interval, reference_price)
+        await self._build_options_around(session)
         return self
 
-    async def run_build_options_loop(self, session: Session, interval: int = 1):
-        while True:
-            await self._build_options_around(session)
-            await asyncio.sleep(interval)
-
     async def _build_options_around(self, session: Session, search_interval: int = 50, price_threshold: float = 3.5, insurance_offset: int = 30):
-        print(f'DEBUG: running updates')
+        """Builds the options strategy based on the reference price and specified criteria."""
+        if not all([self.put_to_buy, self.put_to_sell, self.call_to_sell, self.call_to_buy]):
+            print("Not done")
+            return
         today = date.today()
-        dd = str(today.day)
-        mm = str(today.month)
-        yy = str(today.year)[-2:]
-        exp_date = yy + mm + dd
+        exp_date = f"{str(today.year)[-2:]}{today.month:02d}{today.day:02d}"
         nearest_strike_price = round(self.reference_price / self.options_interval) * self.options_interval
+
+        # Define strike ranges for options to buy and sell
         lower_strikes = [strike for strike in range(nearest_strike_price, nearest_strike_price - search_interval, -self.options_interval)]
         higher_strikes = [strike for strike in range(nearest_strike_price, nearest_strike_price + search_interval, self.options_interval)]
-        
+
         lower_tt_options = [TTOption('SPXW', exp_date, TTOptionSide.PUT, strike) for strike in lower_strikes]
         higher_tt_options = [TTOption('SPXW', exp_date, TTOptionSide.CALL, strike) for strike in higher_strikes]
 
+        # Fetch options data
         lower_options = await TastytradeWrapper.get_options(session, lower_tt_options)
         higher_options = await TastytradeWrapper.get_options(session, higher_tt_options)
-        
-        # Sorting and filtering logic
+
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
-        higher_options.sort(key=lambda o: o.strike_price, reverse=False)
+        higher_options.sort(key=lambda o: o.strike_price)
 
-        lower_streamer_symbols = [o.streamer_symbol for o in lower_options]
-        higher_streamer_symbols = [o.streamer_symbol for o in higher_options]
-
-        await self.live_prices.add_symbols(lower_streamer_symbols + higher_streamer_symbols)
-
-        # Logic for selecting put and call options based on the price threshold
+        # Select suitable PUT and CALL options
         for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             if price < price_threshold:
@@ -95,54 +80,97 @@ class Strategist:
                 self.call_to_buy = await Option.a_get_option(session, tt_call_to_buy.symbol)
                 break
 
-        await self.live_prices.add_symbols([self.call_to_buy.streamer_symbol, self.put_to_buy.streamer_symbol])
+        # Subscribe to live updates for selected options
+        await self.live_prices.add_symbols([
+            self.put_to_sell.streamer_symbol,
+            self.put_to_buy.streamer_symbol,
+            self.call_to_sell.streamer_symbol,
+            self.call_to_buy.streamer_symbol
+        ])
 
     def winnings(self):
+        """Calculates the total winnings for the strategy based on live prices."""
         return (
-            -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
-            + self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
-            + self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
-            - self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
+            -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice +
+            self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice +
+            self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice -
+            self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
         ) * 100
 
-    def show_strategy(self):
-        legs_are_available = self.put_to_buy is not None and \
-            self.put_to_sell is not None and \
-            self.call_to_sell is not None and \
-            self.call_to_buy is not None
-        leg_prices_are_available = legs_are_available and self.put_to_buy.streamer_symbol in self.live_prices.quotes and \
-            self.put_to_sell.streamer_symbol in self.live_prices.quotes and \
-            self.call_to_sell.streamer_symbol in self.live_prices.quotes and \
-            self.call_to_buy.streamer_symbol in self.live_prices.quotes
-        if not legs_are_available or not leg_prices_are_available:
-            print('Wait strategy.')
-            return
-        
-        print('====================')
-        print('>>>>> STRATEGY <<<<<')
-        print(f'Buy {self.put_to_buy.symbol} for {self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice}')
-        print(f'Sell {self.put_to_sell.symbol} for {self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice}')
-        print(f'Sell {self.call_to_sell.symbol} for {self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice}')
-        print(f'Buy {self.call_to_buy.symbol} for {self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice}')
-        print(f'-->> We pocket ${self.winnings()}')
-        print('====================')
 
+class OptionTradingApp:
+    def __init__(self, root):
+        self.loop = asyncio.new_event_loop()
+        threading.Thread(target=self.start_async_loop, daemon=True).start()
 
-async def main():
-    config = TTConfig()
-    session = Session(config.username, config.password, is_test=not config.use_prod)
+        self.setup_ui(root)
+        self.strategist = None  # Will be set in async initialization
 
-    strategist = await Strategist.create(session, 'SPX', 5)
+    def setup_ui(self, root):
+        root.title("Option Trading Strategist")
 
-    try:
+        tk.Label(root, text="Put Sell Price:").grid(row=0, column=0, sticky="w")
+        tk.Label(root, text="Put Buy Price:").grid(row=1, column=0, sticky="w")
+        tk.Label(root, text="Call Sell Price:").grid(row=2, column=0, sticky="w")
+        tk.Label(root, text="Call Buy Price:").grid(row=3, column=0, sticky="w")
+        tk.Label(root, text="Total Winnings:").grid(row=4, column=0, sticky="w")
+
+        self.put_sell_price_var = tk.StringVar()
+        self.put_buy_price_var = tk.StringVar()
+        self.call_sell_price_var = tk.StringVar()
+        self.call_buy_price_var = tk.StringVar()
+        self.winnings_var = tk.StringVar()
+
+        tk.Label(root, textvariable=self.put_sell_price_var).grid(row=0, column=1, sticky="w")
+        tk.Label(root, textvariable=self.put_buy_price_var).grid(row=1, column=1, sticky="w")
+        tk.Label(root, textvariable=self.call_sell_price_var).grid(row=2, column=1, sticky="w")
+        tk.Label(root, textvariable=self.call_buy_price_var).grid(row=3, column=1, sticky="w")
+        tk.Label(root, textvariable=self.winnings_var).grid(row=4, column=1, sticky="w")
+
+        tk.Button(root, text="Exit", command=root.quit).grid(row=5, column=0, columnspan=2, pady=10)
+
+    def start_async_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.initialize_strategist())
+
+    async def initialize_strategist(self):
+        config = TTConfig()
+        session = Session(config.username, config.password, is_test=not config.use_prod)
+
+        # Create the Strategist instance and initialize options data
+        self.strategist = await Strategist.create(session, 'SPX', 5)
+        await self.update_prices_periodically()
+
+    async def update_prices_periodically(self):
         while True:
-            strategist.show_strategy()
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        print("Stopping strategy display loop.")
-    finally:
-        await strategist.live_prices.close_channel()
-        session.destroy()
+            await self.update_ui_values()
+            await asyncio.sleep(1)  # Update every second
 
-if __name__ == '__main__':
-    asyncio.run(main())
+    async def update_ui_values(self):
+        try:
+            put_sell_price = self.strategist.live_prices.quotes[self.strategist.put_to_sell.streamer_symbol].bidPrice
+            put_buy_price = self.strategist.live_prices.quotes[self.strategist.put_to_buy.streamer_symbol].askPrice
+            call_sell_price = self.strategist.live_prices.quotes[self.strategist.call_to_sell.streamer_symbol].bidPrice
+            call_buy_price = self.strategist.live_prices.quotes[self.strategist.call_to_buy.streamer_symbol].askPrice
+
+            # Calculate winnings
+            total_winnings = self.strategist.winnings()
+
+            # Update UI elements
+            self.put_sell_price_var.set(f"${put_sell_price:.2f}")
+            self.put_buy_price_var.set(f"${put_buy_price:.2f}")
+            self.call_sell_price_var.set(f"${call_sell_price:.2f}")
+            self.call_buy_price_var.set(f"${call_buy_price:.2f}")
+            self.winnings_var.set(f"${total_winnings:.2f}")
+
+        except Exception as e:
+            print(f"Error updating UI values: {e}")
+            self.put_sell_price_var.set("N/A")
+            self.put_buy_price_var.set("N/A")
+            self.call_sell_price_var.set("N/A")
+            self.call_buy_price_var.set("N/A")
+            self.winnings_var.set("N/A")
+
+root = tk.Tk()
+app = OptionTradingApp(root)
+root.mainloop()
