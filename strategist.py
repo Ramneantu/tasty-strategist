@@ -1,7 +1,7 @@
 import tkinter as tk
 import asyncio
 import threading
-from datetime import date
+from datetime import date, timedelta
 from dataclasses import dataclass
 
 from tastytrade import Session
@@ -27,6 +27,7 @@ class Strategist:
         underlying_symbol: str,
         options_interval: int
     ):
+        print("Tick create")
         streamer_symbols = await TastytradeWrapper.get_streamer_symbols_equities(session, [underlying_symbol])
         underlying_streamer_symbol = streamer_symbols[0]
         live_prices = await LivePrices.create(session, streamer_symbols)
@@ -40,10 +41,10 @@ class Strategist:
 
     async def _build_options_around(self, session: Session, search_interval: int = 50, price_threshold: float = 3.5, insurance_offset: int = 30):
         """Builds the options strategy based on the reference price and specified criteria."""
-        if not all([self.put_to_buy, self.put_to_sell, self.call_to_sell, self.call_to_buy]):
-            print("Not done")
-            return
-        today = date.today()
+        print("Tick _build_options_around")
+        
+        # Proceed with options setup without premature checks on variables that are about to be initialized.
+        today = date.today() + timedelta(days=1)
         exp_date = f"{str(today.year)[-2:]}{today.month:02d}{today.day:02d}"
         nearest_strike_price = round(self.reference_price / self.options_interval) * self.options_interval
 
@@ -61,32 +62,45 @@ class Strategist:
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
         higher_options.sort(key=lambda o: o.strike_price)
 
-        # Select suitable PUT and CALL options
+        # Initialize PUT options
         for option in lower_options:
-            price = self.live_prices.quotes[option.streamer_symbol].bidPrice
-            if price < price_threshold:
-                self.put_to_sell = option
-                insurance_strike_price = option.strike_price - insurance_offset
-                tt_put_to_buy = TTOption('SPXW', exp_date, TTOptionSide.PUT, insurance_strike_price)
-                self.put_to_buy = await Option.a_get_option(session, tt_put_to_buy.symbol)
-                break
+            try:
+                price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+                if price < price_threshold:
+                    self.put_to_sell = option
+                    insurance_strike_price = option.strike_price - insurance_offset
+                    tt_put_to_buy = TTOption('SPXW', exp_date, TTOptionSide.PUT, insurance_strike_price)
+                    self.put_to_buy = await Option.a_get_option(session, tt_put_to_buy.symbol)
+                    break
+            except KeyError:
+                print(f"Price not available for PUT option at strike {option.strike_price}")
+                continue
 
+        # Initialize CALL options
         for option in higher_options:
-            price = self.live_prices.quotes[option.streamer_symbol].bidPrice
-            if price < price_threshold:
-                self.call_to_sell = option
-                insurance_strike_price = option.strike_price + insurance_offset
-                tt_call_to_buy = TTOption('SPXW', exp_date, TTOptionSide.CALL, insurance_strike_price)
-                self.call_to_buy = await Option.a_get_option(session, tt_call_to_buy.symbol)
-                break
+            try:
+                price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+                if price < price_threshold:
+                    self.call_to_sell = option
+                    insurance_strike_price = option.strike_price + insurance_offset
+                    tt_call_to_buy = TTOption('SPXW', exp_date, TTOptionSide.CALL, insurance_strike_price)
+                    self.call_to_buy = await Option.a_get_option(session, tt_call_to_buy.symbol)
+                    break
+            except KeyError:
+                print(f"Price not available for CALL option at strike {option.strike_price}")
+                continue
 
-        # Subscribe to live updates for selected options
-        await self.live_prices.add_symbols([
-            self.put_to_sell.streamer_symbol,
-            self.put_to_buy.streamer_symbol,
-            self.call_to_sell.streamer_symbol,
-            self.call_to_buy.streamer_symbol
-        ])
+        # Final check to confirm all required options are initialized
+        if all([self.put_to_sell, self.put_to_buy, self.call_to_sell, self.call_to_buy]):
+            await self.live_prices.add_symbols([
+                self.put_to_sell.streamer_symbol,
+                self.put_to_buy.streamer_symbol,
+                self.call_to_sell.streamer_symbol,
+                self.call_to_buy.streamer_symbol
+            ])
+        else:
+            print("Not all options were initialized correctly; exiting _build_options_around.")
+
 
     def winnings(self):
         """Calculates the total winnings for the strategy based on live prices."""
@@ -107,6 +121,7 @@ class OptionTradingApp:
         self.strategist = None  # Will be set in async initialization
 
     def setup_ui(self, root):
+        print("Tick setup_ui")
         root.title("Option Trading Strategist")
 
         tk.Label(root, text="Put Sell Price:").grid(row=0, column=0, sticky="w")
@@ -130,10 +145,12 @@ class OptionTradingApp:
         tk.Button(root, text="Exit", command=root.quit).grid(row=5, column=0, columnspan=2, pady=10)
 
     def start_async_loop(self):
+        print("Tick start_async_loop")
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.initialize_strategist())
 
     async def initialize_strategist(self):
+        print("Tick initialize_strategist")
         config = TTConfig()
         session = Session(config.username, config.password, is_test=not config.use_prod)
 
@@ -143,10 +160,12 @@ class OptionTradingApp:
 
     async def update_prices_periodically(self):
         while True:
+            print("Tick update_prices_periodically")
             await self.update_ui_values()
             await asyncio.sleep(1)  # Update every second
 
     async def update_ui_values(self):
+        print("Tick update_ui_values")
         try:
             put_sell_price = self.strategist.live_prices.quotes[self.strategist.put_to_sell.streamer_symbol].bidPrice
             put_buy_price = self.strategist.live_prices.quotes[self.strategist.put_to_buy.streamer_symbol].askPrice
