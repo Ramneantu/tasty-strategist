@@ -1,6 +1,5 @@
 import json
 from enum import Enum
-from dataclasses import dataclass
 
 class TTOrderType(Enum):
   LIMIT = 'Limit'
@@ -50,46 +49,45 @@ class TTOption:
     self.symbol = symbol + date + side.value + '0' + strike + '0'
 
 class TTOrder:
-  order_type: TTOrderType = TTOrderType.LIMIT
-  tif: TTTimeInForce = TTTimeInForce.GTC
-  price: str = "0.00"
-  price_effect: TTPriceEffect = TTPriceEffect.CREDIT
-  legs: list = []
-  body: dict = {}
+    def __init__(self, tif: TTTimeInForce = None, price: float = None,
+                 price_effect: TTPriceEffect = None, order_type: TTOrderType = None) -> None:
+        self.tif = tif if tif else TTTimeInForce.GTC
+        self.order_type = order_type if order_type else TTOrderType.LIMIT
+        self.price = '{:.2f}'.format(price) if price else "0.00"
+        self.price_effect = price_effect if price_effect else TTPriceEffect.CREDIT
+        
+        # Initialize legs and body as instance-level attributes
+        self.legs = []
+        self.body = {}
 
-  def __init__(self, tif: TTTimeInForce = None, price: float = None,
-                price_effect: TTPriceEffect = None, order_type: TTOrderType = None) -> None:
-    self.tif = tif
-    self.order_type = order_type
-    self.price = '{:2f}'.format(price)
-    self.price_effect = price_effect
+    def add_leg(self, instrument_type: TTInstrumentType = None,
+                symbol: str = None, quantity: int = 0,
+                action: TTLegAction = None) -> None:
+        if len(self.legs) >= 4:
+            print(f'Error: cannot have more than 4 legs per order.')
+            return
 
-  def add_leg(self, instrument_type: TTInstrumentType = None,
-              symbol: str = None, quantity: int = 0,
-              action: TTLegAction = None) -> list:
-    if len(self.legs) >= 4:
-      print(f'Error: cannot have more than 4 legs per order.')
-      return
-    if instrument_type is None or symbol == None or quantity == 0 or action is None:
-      print(f'Invalid parameters')
-      print(f'instrument_type: {instrument_type}')
-      print(f'symbol: {symbol}')
-      print(f'quantity')
-    
-    self.legs.append({
-      'instrument-type': instrument_type.value,
-      'symbol': symbol,
-      'quantity': quantity,
-      'action': action.value
-    })
+        if not all([instrument_type, symbol, quantity, action]):
+            print('Invalid parameters provided for add_leg.')
+            return
 
-  def build_order(self) -> dict:
-    self.body = {
-      'time-in-force': self.tif.value,
-      'price': self.price,
-      'price-effect': self.price_effect.value,
-      'order-type': self.order_type.value,
-      'legs': self.legs
-    }
-    print(json.dumps(self.body))
-    return self.body
+        # Add a new leg to the order's instance-specific legs list
+        self.legs.append({
+            'instrument-type': instrument_type.value,
+            'symbol': symbol,
+            'quantity': quantity,
+            'action': action.value
+        })
+
+    def build_order(self) -> dict:
+        # Build the body using the current instance's attributes
+        self.body = {
+            'time-in-force': self.tif.value,
+            'price': self.price,
+            'price-effect': self.price_effect.value,
+            'order-type': self.order_type.value,
+            'legs': self.legs
+        }
+        print(json.dumps(self.body))
+        return self.body
+
