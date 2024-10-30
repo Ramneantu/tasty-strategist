@@ -1,4 +1,5 @@
 tt.config
+tt.sandbox.config
 TastyBot.config
 logs/
 lib/__pycache__/

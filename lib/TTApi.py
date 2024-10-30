@@ -236,7 +236,7 @@ class TTApi:
     
     def fetch_account_balance(self):
         """Fetches the balance details for the specified account."""
-        url = f"{self.tt_uri}/accounts/{self.user_data["accounts"][0]["account-number"]}/balances"
+        url = f'{self.tt_uri}/accounts/{self.user_data["accounts"][0]["account-number"]}/balances'
         response = requests.get(url, headers=self.headers)
 
         if response.status_code == 200:

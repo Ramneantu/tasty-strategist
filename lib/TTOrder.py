@@ -1,5 +1,6 @@
 import json
 from enum import Enum
+from tastytrade.instruments import Option
 
 class TTOrderType(Enum):
   LIMIT = 'Limit'
@@ -41,12 +42,16 @@ class TTOptionSide(Enum):
 
 class TTOption:
   symbol: str = None
+  streamer_symbol: str = None
+  strike_price: str = None
 
   def __init__(self, symbol: str = None, date: str = None,
                 side: TTOptionSide = None, strike: float = None) -> None:
     symbol = symbol.ljust(6, ' ')
-    strike = str(int(strike * 100)).replace('.', '').zfill(6)
-    self.symbol = symbol + date + side.value + '0' + strike + '0'
+    strike_str = str(int(strike * 100)).replace('.', '').zfill(6)
+    self.symbol = symbol + date + side.value + '0' + strike_str + '0'
+    self.strike_price = int(round(strike)) # integer strike
+    self.streamer_symbol = Option.occ_to_streamer_symbol(self.symbol)
 
 class TTOrder:
     def __init__(self, tif: TTTimeInForce = None, price: float = None,
@@ -88,6 +93,5 @@ class TTOrder:
             'order-type': self.order_type.value,
             'legs': self.legs
         }
-        print(json.dumps(self.body))
         return self.body
 
