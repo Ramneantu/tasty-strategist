@@ -104,8 +104,8 @@ class Strategist:
 
     async def _build_strategy(self, session: Session, search_interval: int = 100, price_threshold: float = 3.5, insurance_offset: int = 30):
         today = date.today()
-        dd = str(today.day)
-        mm = str(today.month)
+        dd = str(today.day).zfill(2)
+        mm = str(today.month).zfill(2)
         yy = str(today.year)[-2:]
         exp_date = yy + mm + dd
         nearest_strike_price = round(self.get_reference_price() / self.options_interval) * self.options_interval
