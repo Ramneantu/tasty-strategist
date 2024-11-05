@@ -226,7 +226,7 @@ async def main():
                                  f"${strategist.get_call_to_sell_price()}"
                         )
                     margin_label.config(
-                        text=f"Margin required: {('$' + strategist.margin) if strategist.margin is not None else 'N/A'}"
+                        text=f"Margin required: {(f'${strategist.margin:.2f}') if strategist.margin is not None else 'N/A'}"
                     )
                 else:
                     winnings_label.config(text="Wait for strategy to initialize...")

@@ -231,7 +231,7 @@ class TTApi:
         if response is None or "data" not in response:
             raise Exception("Order submission failed. Invalid response from the API.")
 
-        print(json.dumps(response))
+        # print(json.dumps(response))
         return response["data"]
     
     def fetch_account_balance(self):
