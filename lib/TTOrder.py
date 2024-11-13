@@ -52,6 +52,10 @@ class TTOption:
     self.symbol = symbol + date + side.value + '0' + strike_str + '0'
     self.strike_price = int(round(strike)) # integer strike
     self.streamer_symbol = Option.occ_to_streamer_symbol(self.symbol)
+  
+  def __str__(self):
+    return (f"TTOption(symbol={self.symbol}, streamer_symbol={self.streamer_symbol}, "
+            f"strike_price={self.strike_price})")
 
 class TTOrder:
     def __init__(self, tif: TTTimeInForce = None, price: float = None,
@@ -94,4 +98,18 @@ class TTOrder:
             'legs': self.legs
         }
         return self.body
+      
+    def __str__(self):
+        # String representation of the order
+        legs_str = "\n  ".join(
+            f"{leg['action']} {leg['quantity']} x {leg['symbol']} ({leg['instrument-type']})"
+            for leg in self.legs
+        )
+        return (f"TTOrder(\n"
+                f"  Time in Force: {self.tif.value}\n"
+                f"  Price: {self.price}\n"
+                f"  Price Effect: {self.price_effect.value}\n"
+                f"  Order Type: {self.order_type.value}\n"
+                f"  Legs:\n  {legs_str}\n"
+                f")")
 

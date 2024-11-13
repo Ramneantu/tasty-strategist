@@ -1,4 +1,5 @@
 import json, requests
+from datetime import datetime
 from lib.TTConfig import *
 from lib.TTOrder import *
 
@@ -218,11 +219,10 @@ class TTApi:
             response = self.__get(f"/watchlists/{watchlist}")
         return response
 
-    def simple_order(self, order: TTOrder = None):
+    def simple_order_dry_run(self, order: TTOrder = None):
         if order is None:
             raise ValueError("You need to supply an order.")
 
-        # print(f'Order: {order.build_order()}')
         response = self.__post(
             f'/accounts/{self.user_data["accounts"][0]["account-number"]}/orders/dry-run',
             body=order.build_order(),
@@ -231,7 +231,20 @@ class TTApi:
         if response is None or "data" not in response:
             raise Exception("Order submission failed. Invalid response from the API.")
 
-        # print(json.dumps(response))
+        return response["data"]
+    
+    def simple_order(self, order: TTOrder = None):
+        if order is None:
+            raise ValueError("You need to supply an order.")
+
+        response = self.__post(
+            f'/accounts/{self.user_data["accounts"][0]["account-number"]}/orders',
+            body=order.build_order(),
+        )
+
+        if response is None or "data" not in response:
+            raise Exception("Order submission failed. Invalid response from the API.")
+
         return response["data"]
     
     def fetch_account_balance(self):
@@ -250,6 +263,71 @@ class TTApi:
         else:
             print(f"Failed to retrieve balance data: {response.status_code}")
             return None
+        
+    def get_order(self, order_id):
+        """Get information about an order and return it as a TTOrder instance."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+        response = self.__get(f'/accounts/{account_number}/orders/{order_id}')
+        
+        if not response or "data" not in response:
+            raise Exception("Failed to retrieve open orders.")
+        
+        order_data = response["data"]
+        
+        tif = TTTimeInForce(order_data["time-in-force"])
+        price = float(order_data["price"])
+        price_effect = TTPriceEffect(order_data["price-effect"])
+        order_type = TTOrderType(order_data["order-type"])
+
+        order = TTOrder(tif=tif, price=price, price_effect=price_effect, order_type=order_type)
+        
+        for leg in order_data.get("legs", []):
+            instrument_type = TTInstrumentType(leg["instrument-type"])
+            symbol = leg["symbol"]
+            quantity = leg["quantity"]
+            action = TTLegAction(leg["action"])
+            
+            order.add_leg(instrument_type=instrument_type, symbol=symbol, quantity=quantity, action=action)
+        
+        return order
+        
+    def get_order_options(self, order_id):
+        """Get the option legs of an order as a list of TTOption instances."""
+        order = self.get_order(order_id)
+        
+        options = []
+        for leg in order.get("legs", []):
+            symbol = leg["symbol"]
+            
+            date = symbol[6:12]
+            side = TTOptionSide.CALL if "Call" in symbol else TTOptionSide.PUT
+            strike = float(symbol[-7:-1]) / 100
+            
+            option = TTOption(symbol=symbol[:6].strip(), date=date, side=side, strike=strike)
+            options.append(option)
+        
+        return options
+    
+    def create_reverse_order(self, order):
+        """Create a reverse TTOrder instance based on an existing TTOrder instance."""
+        
+        price_effect = TTPriceEffect.DEBIT if order.price_effect == TTPriceEffect.CREDIT else TTPriceEffect.CREDIT
+        order_type = order.order_type
+        time_in_force = order.tif
+        price = float(order.price)
+
+        reverse_order = TTOrder(tif=time_in_force, price=price, price_effect=price_effect, order_type=order_type)
+        
+        for leg in order.legs:
+            action = TTLegAction.BTC if leg["action"] == TTLegAction.STO.value else TTLegAction.STC
+            instrument_type = TTInstrumentType(leg["instrument-type"])
+            symbol = leg["symbol"]
+            quantity = leg["quantity"]
+
+            reverse_order.add_leg(instrument_type=instrument_type, symbol=symbol, quantity=quantity, action=action)
+
+        return reverse_order
+
         
     def fetch_open_orders(self):
         """Fetches all open orders for the specified account."""
@@ -285,3 +363,28 @@ class TTApi:
                 self.cancel_order(account_number, order["order-id"])
             except Exception as e:
                 print(f"Error canceling order {order['order-id']}: {e}")
+                
+    def increase_sandbox_balance(self, amount: float):
+        """Increase the sandbox account balance by simulating a deposit."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+
+        executed_at = datetime.utcnow().isoformat() + "Z"  # Add 'Z' to indicate UTC time
+
+        transaction_payload = {
+            "transaction-type": "Money Movement",
+            "transaction-sub-type": "Deposit",
+            "description": "Mock deposit to increase balance",
+            "value": '{:.2f}'.format(amount),  # Format the amount to two decimal places
+            "value-effect": "Credit",
+            "executed-at": executed_at
+        }
+
+        # Send the deposit transaction request
+        response = self.__post(f'/accounts/{account_number}/transactions', body=transaction_payload)
+
+        if response is not None:
+            print(f"Successfully increased balance by {amount}.")
+            return response
+        else:
+            print("Failed to increase balance.")
+            return None
