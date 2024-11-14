@@ -104,7 +104,7 @@ class Strategist:
 
     async def _build_strategy(self, session: Session, search_interval: int = 100, price_threshold: float = 3.5, insurance_offset: int = 30):
         today = date.today()
-        dd = str(today.day).zfill(2)
+        dd = str(today.day + 1).zfill(2)
         mm = str(today.month).zfill(2)
         yy = str(today.year)[-2:]
         exp_date = yy + mm + dd
@@ -182,22 +182,22 @@ async def main():
     root = tk.Tk()
     root.title("Strategist Winnings")
 
-    winnings_label = tk.Label(root, text="Calculating...", font=("Helvetica", 16))
+    winnings_label = tk.Label(root, text="Calculating...", font=("Helvetica", 30))
     winnings_label.pack(pady=10)
     
-    put_to_buy_label = tk.Label(root, text="Put to Buy: -", font=("Helvetica", 12))
+    put_to_buy_label = tk.Label(root, text="Put to Buy: -", font=("Helvetica", 20))
     put_to_buy_label.pack()
 
-    put_to_sell_label = tk.Label(root, text="Put to Sell: -", font=("Helvetica", 12))
+    put_to_sell_label = tk.Label(root, text="Put to Sell: -", font=("Helvetica", 20))
     put_to_sell_label.pack()
 
-    call_to_sell_label = tk.Label(root, text="Call to Sell: -", font=("Helvetica", 12))
+    call_to_sell_label = tk.Label(root, text="Call to Sell: -", font=("Helvetica", 20))
     call_to_sell_label.pack()
 
-    call_to_buy_label = tk.Label(root, text="Call to Buy: -", font=("Helvetica", 12))
+    call_to_buy_label = tk.Label(root, text="Call to Buy: -", font=("Helvetica", 20))
     call_to_buy_label.pack()
 
-    margin_label = tk.Label(root, text="Margin: -", font=("Helvetica", 16))
+    margin_label = tk.Label(root, text="Margin: -", font=("Helvetica", 30))
     margin_label.pack(pady=10)
 
     async def update_winnings(tick_interval: float = 0.1):
