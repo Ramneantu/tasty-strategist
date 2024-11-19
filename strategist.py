@@ -12,11 +12,9 @@ from tastytrade.instruments import Option, Equity, OptionType
 from tastytrade.instruments import get_option_chain
 from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType
 
-from lib import TTConfig, TTOption, TTOptionSide
+from lib import TTConfig
 
 from live_prices import LivePrices, TastytradeWrapper
-
-from lib import TTConfig, TTApi, TTOption, TTOptionSide, TTOrder, TTTimeInForce, TTPriceEffect, TTOrderType, TTLegAction, TTInstrumentType
 
 
 @dataclass
@@ -95,7 +93,7 @@ class Strategist:
         # Logic for selecting put and call options based on the price threshold
         for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
-            print(f'PUT price at strike {option.strike_price}: {price}')
+            # print(f'PUT price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 self.put_to_sell = option
                 insurance_strike_price = option.strike_price - insurance_offset
@@ -104,7 +102,7 @@ class Strategist:
         
         for option in higher_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
-            print(f'CALL price at strike {option.strike_price}: {price}')
+            # print(f'CALL price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 self.call_to_sell = option
                 insurance_strike_price = option.strike_price + insurance_offset
@@ -114,7 +112,7 @@ class Strategist:
         order = self._build_order()
         try:
             response = account.place_order(session, order, dry_run=True)  # a test order
-            print(response)
+            self.margin = response.buying_power_effect.change_in_buying_power
         except Exception as e:
             print(f"Error updating/getting margin: {e}")
             self.margin = None
@@ -160,6 +158,7 @@ async def main():
     session = Session(config.username, config.password, is_test=not config.use_prod)
     session_sandbox = Session(config_sandbox.username, config_sandbox.password, is_test=not config_sandbox.use_prod)
     account_sandbox = Account.get_accounts(session_sandbox)[0]
+    print(f'Account number: {account_sandbox.account_number}')
 
     strategist = await Strategist.create(session, session_sandbox, account_sandbox, 'SPX', 'SPXW')
 
