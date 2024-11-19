@@ -1,12 +1,16 @@
 import asyncio
 import tkinter as tk
-from datetime import date
+from datetime import date, timedelta
 from dataclasses import dataclass
+from typing import List
+from decimal import Decimal
 
 from tastytrade import DXLinkStreamer
 from tastytrade.dxfeed import Greeks, Quote
 from tastytrade import Session, Account
-from tastytrade.instruments import Option, Equity
+from tastytrade.instruments import Option, Equity, OptionType
+from tastytrade.instruments import get_option_chain
+from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType
 
 from lib import TTConfig, TTOption, TTOptionSide
 
@@ -18,77 +22,50 @@ from lib import TTConfig, TTApi, TTOption, TTOptionSide, TTOrder, TTTimeInForce,
 @dataclass
 class Strategist:
     live_prices: LivePrices
-    underlying_streamer_symbol: str
-    options_interval: int
-    options_streamer_symbols: list[str]
-    put_to_sell: TTOption | None = None
-    put_to_buy: TTOption | None = None
-    call_to_sell: TTOption | None = None
-    call_to_buy: TTOption | None = None
+    underlying_symbol: str
+    root_symbol: str
+    options: List[Option]
+    put_to_sell: Option | None = None
+    put_to_buy: Option | None = None
+    call_to_sell: Option | None = None
+    call_to_buy: Option | None = None
     margin: float | None = None
-    api: TTApi | None = None
 
 
     @classmethod
     async def create(
         cls,
         session: Session,
+        session_sandbox: Session,
+        account_sandbox: Account,
         underlying_symbol: str,
-        options_interval: int
+        root_symbol: str,
     ):
-        streamer_symbols = await TastytradeWrapper.get_streamer_symbols_equities(session, [underlying_symbol])
-        underlying_streamer_symbol = streamer_symbols[0]
-        live_prices = await LivePrices.create(session, streamer_symbols)
+        
+        live_prices = await LivePrices.create(session, [underlying_symbol])
 
-        reference_price = (live_prices.quotes[underlying_streamer_symbol].bidPrice + live_prices.quotes[underlying_streamer_symbol].askPrice) / 2
-        print(f'{underlying_streamer_symbol} is at {reference_price}')
+        reference_price = (live_prices.quotes[underlying_symbol].bidPrice + live_prices.quotes[underlying_symbol].askPrice) / 2
+        print(f'{underlying_symbol} is at {reference_price}')
 
-        self = cls(live_prices, underlying_streamer_symbol, options_interval, [])
+        options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=0)]
 
-        self.api = TTApi(TTConfig(filename='tt.sandbox.config'))
-        if not self.login_and_validate():
-            print("Problem at login")
-            return
+        self = cls(live_prices, underlying_symbol, root_symbol, options)
         
         # Do an initial run so we have a strategy straight-away. Also populates the LivePrices more than required so we don't have to await it again in the continuous loop
-        await self._build_strategy(session, search_interval=100)
+        await self._build_strategy(session_sandbox, account_sandbox)
         # Start the continuous build options loop
-        asyncio.create_task(self._run_build_strategy(session))
+        asyncio.create_task(self._run_build_strategy(session_sandbox, account_sandbox))
         
         return self
 
-    def login_and_validate(self):
-        if not self.api.login():
-            print("Login failed!")
-            return False
-
-        print("Login successful")
-
-        if not self.api.validate():
-            print("Validation failed!")
-            return False
-
-        print("Validation successful")
-
-        if not self.api.fetch_accounts():
-            print("Failed to fetch accounts!")
-            return False
-
-        print("Accounts fetched successfully")
-        self.api.fetch_account_balance()
-        return True
-    
-    @staticmethod
-    def convert_option_to_tt_option(option):
-        return TTOption(option.root_symbol, option.expiration_date.strftime('%y%m%d'), TTOptionSide.CALL if option.option_type == 'C' else TTOptionSide.PUT, int(option.strike_price))
         
-    async def _run_build_strategy(self, session: Session, update_interval: int = 3):
+    async def _run_build_strategy(self, session: Session, account: Account, update_interval: int = 3):
         while True:
-            await self._build_strategy(session, search_interval=50)
+            await self._build_strategy(session, account)
             await asyncio.sleep(update_interval)
 
     def get_reference_price(self):
-        return (self.live_prices.quotes[self.underlying_streamer_symbol].bidPrice + self.live_prices.quotes[self.underlying_streamer_symbol].askPrice) / 2
+        return (self.live_prices.quotes[self.underlying_symbol].bidPrice + self.live_prices.quotes[self.underlying_symbol].askPrice) / 2
     
     def get_put_to_sell_price(self):
         return self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
@@ -102,57 +79,60 @@ class Strategist:
     def get_call_to_buy_price(self):
         return self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
 
-    async def _build_strategy(self, session: Session, search_interval: int = 100, price_threshold: float = 3.5, insurance_offset: int = 30):
-        today = date.today()
-        dd = str(today.day + 1).zfill(2)
-        mm = str(today.month).zfill(2)
-        yy = str(today.year)[-2:]
-        exp_date = yy + mm + dd
-        nearest_strike_price = round(self.get_reference_price() / self.options_interval) * self.options_interval
-        lower_strikes = [strike for strike in range(nearest_strike_price, nearest_strike_price - search_interval, -self.options_interval)]
-        higher_strikes = [strike for strike in range(nearest_strike_price, nearest_strike_price + search_interval, self.options_interval)]
-        
-        lower_tt_options = [TTOption('SPXW', exp_date, TTOptionSide.PUT, strike) for strike in lower_strikes]
-        higher_tt_options = [TTOption('SPXW', exp_date, TTOptionSide.CALL, strike) for strike in higher_strikes]
+    async def _build_strategy(self, session: Session, account: Account, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
+        reference_price_locked = self.get_reference_price()
+        lower_options = [option for option in self.options if reference_price_locked - search_interval <= option.strike_price and option.strike_price <= reference_price_locked and option.option_type == OptionType.PUT]
+        lower_options.sort(key=lambda o: o.strike_price, reverse=True)
+        higher_options = [option for option in self.options if reference_price_locked <= option.strike_price and option.strike_price <= reference_price_locked + search_interval and option.option_type == OptionType.CALL]
+        higher_options.sort(key=lambda o: o.strike_price)
 
-        lower_streamer_symbols = [Option.occ_to_streamer_symbol(o.symbol) for o in lower_tt_options]
-        higher_streamer_symbols = [Option.occ_to_streamer_symbol(o.symbol) for o in higher_tt_options]
+        lower_streamer_symbols = [o.streamer_symbol for o in lower_options]
+        higher_streamer_symbols = [o.streamer_symbol for o in higher_options]
 
         # This will be super fast except the first time
         await self.live_prices.add_symbols(lower_streamer_symbols + higher_streamer_symbols)
 
         # Logic for selecting put and call options based on the price threshold
-        for option in lower_tt_options:
+        for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+            print(f'PUT price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 self.put_to_sell = option
                 insurance_strike_price = option.strike_price - insurance_offset
-                self.put_to_buy = TTOption('SPXW', exp_date, TTOptionSide.PUT, insurance_strike_price)
+                self.put_to_buy = next((o for o in lower_options if o.strike_price <= insurance_strike_price), None)
                 break
-
-        for option in higher_tt_options:
+        
+        for option in higher_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+            print(f'CALL price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 self.call_to_sell = option
                 insurance_strike_price = option.strike_price + insurance_offset
-                self.call_to_buy = TTOption('SPXW', exp_date, TTOptionSide.CALL, insurance_strike_price)
+                self.call_to_buy = next((o for o in higher_options if o.strike_price >= insurance_strike_price), None)
                 break
         
-        order = TTOrder(TTTimeInForce.GTC, 0.05, TTPriceEffect.DEBIT, TTOrderType.LIMIT)
-        order.add_leg(TTInstrumentType.EQUITY_OPTION, self.put_to_sell.symbol, 1, TTLegAction.STO)
-        order.add_leg(TTInstrumentType.EQUITY_OPTION, self.put_to_buy.symbol, 1, TTLegAction.BTO)
-        order.add_leg(TTInstrumentType.EQUITY_OPTION, self.call_to_sell.symbol, 1, TTLegAction.STO)
-        order.add_leg(TTInstrumentType.EQUITY_OPTION, self.call_to_buy.symbol, 1, TTLegAction.BTO)
-        
+        order = self._build_order()
         try:
-            order_response = self.api.simple_order(order)
-            margin_required = float(order_response["buying-power-effect"]["change-in-buying-power"])
-            self.margin = margin_required
+            response = account.place_order(session, order, dry_run=True)  # a test order
+            print(response)
         except Exception as e:
             print(f"Error updating/getting margin: {e}")
             self.margin = None
-        
-        await self.live_prices.add_symbols([self.call_to_buy.streamer_symbol, self.put_to_buy.streamer_symbol])
+
+    
+    def _build_order(self) -> NewOrder:
+        leg_put_buy_to_open = self.put_to_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN)
+        leg_put_sell_to_open = self.put_to_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN)
+        leg_call_sell_to_open = self.call_to_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN)
+        leg_call_buy_to_open = self.call_to_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN)
+
+        return NewOrder(
+            time_in_force=OrderTimeInForce.DAY,
+            order_type=OrderType.LIMIT,
+            legs=[leg_put_buy_to_open, leg_put_sell_to_open, leg_call_sell_to_open, leg_call_buy_to_open],  # you can have multiple legs in an order
+            price=Decimal('-10')  # limit price, $10/share debit for a total value of $50
+        )
+
 
     def winnings(self):
         return (
@@ -176,8 +156,12 @@ class Strategist:
 
 async def main():
     config = TTConfig(filename='tt.config')
+    config_sandbox = TTConfig(filename='tt.sandbox.config')
     session = Session(config.username, config.password, is_test=not config.use_prod)
-    strategist = await Strategist.create(session, 'SPX', 5)
+    session_sandbox = Session(config_sandbox.username, config_sandbox.password, is_test=not config_sandbox.use_prod)
+    account_sandbox = Account.get_accounts(session_sandbox)[0]
+
+    strategist = await Strategist.create(session, session_sandbox, account_sandbox, 'SPX', 'SPXW')
 
     root = tk.Tk()
     root.title("Strategist Winnings")
