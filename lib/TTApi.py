@@ -319,7 +319,11 @@ class TTApi:
         reverse_order = TTOrder(tif=time_in_force, price=price, price_effect=price_effect, order_type=order_type)
         
         for leg in order.legs:
-            action = TTLegAction.BTC if leg["action"] == TTLegAction.STO.value else TTLegAction.STC
+            action = None
+            if leg["action"] == TTLegAction.STO.value:
+                action = TTLegAction.BTC
+            if leg["action"] == TTLegAction.BTO.value:
+                action = TTLegAction.STC
             instrument_type = TTInstrumentType(leg["instrument-type"])
             symbol = leg["symbol"]
             quantity = leg["quantity"]
@@ -328,6 +332,15 @@ class TTApi:
 
         return reverse_order
 
+    def fetch_open_positions(self):
+        """Fetches all open positions for the specified account."""
+        account_number = self.user_data["accounts"][0]["account-number"]
+        response = self.__get(f'/accounts/{account_number}/positions')
+        
+        if response and "data" in response:
+            return response["data"]["items"]
+        else:
+            raise Exception("Failed to retrieve open positions.")
         
     def fetch_open_orders(self):
         """Fetches all open orders for the specified account."""
@@ -338,6 +351,7 @@ class TTApi:
             return response["data"]["items"]
         else:
             raise Exception("Failed to retrieve open orders.")
+        
         
     def cancel_order(self, order_id):
         """Cancels an order by its ID."""
