@@ -4,17 +4,101 @@ from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import List
 from decimal import Decimal
+from enum import Enum
 
 from tastytrade import DXLinkStreamer
 from tastytrade.dxfeed import Greeks, Quote
 from tastytrade import Session, Account
 from tastytrade.instruments import Option, Equity, OptionType
 from tastytrade.instruments import get_option_chain
-from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType
+from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse
 
 from lib import TTConfig
 
 from live_prices import LivePrices, TastytradeWrapper
+
+
+@dataclass
+class IronCondor:
+    put_buy: Option
+    put_sell: Option
+    call_sell: Option
+    call_buy: Option
+
+    def __init__(self, put_buy, put_sell, call_sell, call_buy):
+        # Validate inputs
+        if None in (put_buy, put_sell, call_sell, call_buy):
+            raise ValueError("IronCondor cannot be initialized with None option objects.")
+
+        # Initialize the instance variables
+        self.put_buy = put_buy
+        self.put_sell = put_sell
+        self.call_sell = call_sell
+        self.call_buy = call_buy
+
+    def _order(self, open: bool, limit: Decimal) -> NewOrder:
+        # Negative decimal to close position
+        leg_put_buy = self.put_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN if open else OrderAction.SELL_TO_CLOSE)
+        leg_put_sell = self.put_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN if open else OrderAction.BUY_TO_CLOSE)
+        leg_call_sell = self.call_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN if open else OrderAction.BUY_TO_CLOSE)
+        leg_call_buy = self.call_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN if open else OrderAction.SELL_TO_CLOSE)
+
+        return NewOrder(
+            time_in_force=OrderTimeInForce.DAY,
+            order_type=OrderType.LIMIT,
+            legs=[leg_put_buy, leg_put_sell, leg_call_sell, leg_call_buy],  # you can have multiple legs in an order
+            price=limit  # limit price, $10/share debit for a total value of $50
+        )
+    
+    # Opening Iron Condor gives money
+    def opening_order(self, limit: Decimal = Decimal('0.05')):
+        return self._order(True, limit)
+    
+    # Closing Iron Condor consts money
+    def closing_order(self, limit: Decimal = Decimal('-0.05')):
+        return self._order(False, limit)
+    
+
+class PositionState(Enum):
+
+    PENDING = 'position not open yet'
+    OPEN = 'position in opened'
+    CLOSED = 'postition closed'
+
+
+@dataclass
+class PositionManager:
+    position: IronCondor
+    state: PositionState = PositionState.PENDING
+    open_response: PlacedOrderResponse | None = None
+    close_response: PlacedOrderResponse | None = None
+    
+    # Can raise an exception from the account place_order part
+    async def open_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
+        order = self.position.opening_order()
+        response = await account.a_place_order(session, order, dry_run)
+        self.state = PositionState.OPEN
+        self.open_response = response
+        return response
+
+    # Can raise an exception from the account place_order part
+    async def close_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
+        order = self.position.closing_order()
+        response = await account.a_place_order(session, order, dry_run)
+        self.state = PositionState.CLOSED
+        self.close_response = response
+        return response
+    
+    # Use this to fully initialize position!
+    async def margin_requirement(self, session: Session, account: Account):
+        if self.open_response is None:
+            await self.open_position(session, account, dry_run=True)
+        return self.open_response.buying_power_effect.change_in_buying_power
+    
+    def margin_requirement_no_wait(self):
+        if self.open_response is None:
+            return None
+        return self.open_response.buying_power_effect.change_in_buying_power
 
 
 @dataclass
@@ -23,10 +107,7 @@ class Strategist:
     underlying_symbol: str
     root_symbol: str
     options: List[Option]
-    put_to_sell: Option | None = None
-    put_to_buy: Option | None = None
-    call_to_sell: Option | None = None
-    call_to_buy: Option | None = None
+    position_manager: PositionManager | None = None
     margin: float | None = None
 
 
@@ -50,34 +131,44 @@ class Strategist:
         self = cls(live_prices, underlying_symbol, root_symbol, options)
         
         # Do an initial run so we have a strategy straight-away. Also populates the LivePrices more than required so we don't have to await it again in the continuous loop
-        await self._build_strategy(session_sandbox, account_sandbox)
+        await self._build_strategy()
         # Start the continuous build options loop
-        asyncio.create_task(self._run_build_strategy(session_sandbox, account_sandbox))
+        asyncio.create_task(self._run_build_strategy())
+        asyncio.create_task(self._run_margin_requirement(session_sandbox, account_sandbox))
         
         return self
 
-        
-    async def _run_build_strategy(self, session: Session, account: Account, update_interval: int = 3):
+    async def _run_margin_requirement(self, session: Session, account: Account):
         while True:
-            await self._build_strategy(session, account)
+            await self.compute_margin_requirement(session, account)
+            await asyncio.sleep(0.3)
+
+    async def _run_build_strategy(self, update_interval: int = 3):
+        while True:
+            await self._build_strategy()
             await asyncio.sleep(update_interval)
 
     def get_reference_price(self):
         return (self.live_prices.quotes[self.underlying_symbol].bidPrice + self.live_prices.quotes[self.underlying_symbol].askPrice) / 2
     
     def get_put_to_sell_price(self):
-        return self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
+        return self.live_prices.quotes[self.position_manager.position.put_sell.streamer_symbol].bidPrice
     
     def get_puy_to_buy_price(self):
-        return self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
+        return self.live_prices.quotes[self.position_manager.position.put_buy.streamer_symbol].askPrice
     
     def get_call_to_sell_price(self):
-        return self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
+        return self.live_prices.quotes[self.position_manager.position.call_sell.streamer_symbol].bidPrice
     
     def get_call_to_buy_price(self):
-        return self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
+        return self.live_prices.quotes[self.position_manager.position.call_buy.streamer_symbol].askPrice
+    
+    async def compute_margin_requirement(self, session: Session, account: Account):
+        if self.position_manager is not None:
+            await self.position_manager.margin_requirement(session, account)
 
-    async def _build_strategy(self, session: Session, account: Account, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
+
+    async def _build_strategy(self, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
         reference_price_locked = self.get_reference_price()
         lower_options = [option for option in self.options if reference_price_locked - search_interval <= option.strike_price and option.strike_price <= reference_price_locked and option.option_type == OptionType.PUT]
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
@@ -90,66 +181,50 @@ class Strategist:
         # This will be super fast except the first time
         await self.live_prices.add_symbols(lower_streamer_symbols + higher_streamer_symbols)
 
+        put_to_buy: Option | None = None
+        put_to_sell: Option | None = None
+        call_to_sell: Option | None = None
+        call_to_buy: Option | None = None
         # Logic for selecting put and call options based on the price threshold
         for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             # print(f'PUT price at strike {option.strike_price}: {price}')
             if price < price_threshold:
-                self.put_to_sell = option
+                put_to_sell = option
                 insurance_strike_price = option.strike_price - insurance_offset
-                self.put_to_buy = next((o for o in lower_options if o.strike_price <= insurance_strike_price), None)
+                put_to_buy = next((o for o in lower_options if o.strike_price <= insurance_strike_price), None)
                 break
         
         for option in higher_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             # print(f'CALL price at strike {option.strike_price}: {price}')
             if price < price_threshold:
-                self.call_to_sell = option
+                call_to_sell = option
                 insurance_strike_price = option.strike_price + insurance_offset
-                self.call_to_buy = next((o for o in higher_options if o.strike_price >= insurance_strike_price), None)
+                call_to_buy = next((o for o in higher_options if o.strike_price >= insurance_strike_price), None)
                 break
         
-        order = self._build_order()
         try:
-            response = account.place_order(session, order, dry_run=True)  # a test order
-            self.margin = response.buying_power_effect.change_in_buying_power
+            # TODO: Check if position changed and if not don't create new object!
+            suggested_position = IronCondor(put_to_buy, put_to_sell, call_to_sell, call_to_buy)
+            self.position_manager = PositionManager(suggested_position)
         except Exception as e:
-            print(f"Error updating/getting margin: {e}")
-            self.margin = None
-
-    
-    def _build_order(self) -> NewOrder:
-        leg_put_buy_to_open = self.put_to_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN)
-        leg_put_sell_to_open = self.put_to_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN)
-        leg_call_sell_to_open = self.call_to_sell.build_leg(Decimal(1), OrderAction.SELL_TO_OPEN)
-        leg_call_buy_to_open = self.call_to_buy.build_leg(Decimal(1), OrderAction.BUY_TO_OPEN)
-
-        return NewOrder(
-            time_in_force=OrderTimeInForce.DAY,
-            order_type=OrderType.LIMIT,
-            legs=[leg_put_buy_to_open, leg_put_sell_to_open, leg_call_sell_to_open, leg_call_buy_to_open],  # you can have multiple legs in an order
-            price=Decimal('-10')  # limit price, $10/share debit for a total value of $50
-        )
+            # No need to set the position_manager to None as it already is per default
+            print('Error building and testing order')
+            print(e)
 
 
     def winnings(self):
         return (
-            -self.live_prices.quotes[self.put_to_buy.streamer_symbol].askPrice
-            + self.live_prices.quotes[self.put_to_sell.streamer_symbol].bidPrice
-            + self.live_prices.quotes[self.call_to_sell.streamer_symbol].bidPrice
-            - self.live_prices.quotes[self.call_to_buy.streamer_symbol].askPrice
+            - self.get_puy_to_buy_price()
+            + self.get_put_to_sell_price()
+            + self.get_call_to_sell_price()
+            - self.get_call_to_buy_price()
         ) * 100
     
     def is_strategy_available(self):
-        legs_are_available = self.put_to_buy is not None and \
-            self.put_to_sell is not None and \
-            self.call_to_sell is not None and \
-            self.call_to_buy is not None
-        leg_prices_are_available = legs_are_available and self.put_to_buy.streamer_symbol in self.live_prices.quotes and \
-            self.put_to_sell.streamer_symbol in self.live_prices.quotes and \
-            self.call_to_sell.streamer_symbol in self.live_prices.quotes and \
-            self.call_to_buy.streamer_symbol in self.live_prices.quotes
-        return legs_are_available and leg_prices_are_available
+        return self.position_manager is not None
+    
 
 
 async def main():
@@ -188,28 +263,28 @@ async def main():
             while True:
                 if strategist.is_strategy_available():
                     winnings_label.config(text=f"Winnings: ${strategist.winnings():.2f}")
-                    if strategist.put_to_sell:
+                    if strategist.position_manager.position.put_sell:
                         put_to_sell_label.config(
-                            text=f"Put to Sell ({strategist.put_to_sell.symbol}): "
+                            text=f"Put to Sell ({strategist.position_manager.position.put_sell.symbol}): "
                                  f"${strategist.get_put_to_sell_price()}"
                         )
-                    if strategist.put_to_buy:
+                    if strategist.position_manager.position.put_buy:
                         put_to_buy_label.config(
-                            text=f"Put to Buy ({strategist.put_to_buy.symbol}): "
+                            text=f"Put to Buy ({strategist.position_manager.position.put_buy.symbol}): "
                                  f"${strategist.get_puy_to_buy_price()}"
                         )
-                    if strategist.call_to_buy:
+                    if strategist.position_manager.position.call_buy:
                         call_to_buy_label.config(
-                            text=f"Call to Buy ({strategist.call_to_buy.symbol}): "
+                            text=f"Call to Buy ({strategist.position_manager.position.call_buy.symbol}): "
                                  f"${strategist.get_call_to_buy_price()}"
                         )
-                    if strategist.call_to_sell:
+                    if strategist.position_manager.position.call_sell:
                         call_to_sell_label.config(
-                            text=f"Call to Sell ({strategist.call_to_sell.symbol}): "
+                            text=f"Call to Sell ({strategist.position_manager.position.call_sell.symbol}): "
                                  f"${strategist.get_call_to_sell_price()}"
                         )
                     margin_label.config(
-                        text=f"Margin required: {(f'${strategist.margin:.2f}') if strategist.margin is not None else 'N/A'}"
+                        text=f"Margin required: {(f'${strategist.position_manager.margin_requirement_no_wait():.2f}') if strategist.position_manager.margin_requirement_no_wait() is not None else 'N/A'}"
                     )
                 else:
                     winnings_label.config(text="Wait for strategy to initialize...")
