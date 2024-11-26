@@ -41,9 +41,9 @@ class LivePrices:
         streamer_symbols: list[str],
     ):
         streamer = await DXLinkStreamer.create(session)
-        # subscribe to quotes and greeks for all options on that date
         await streamer.subscribe(Quote, streamer_symbols)
-
+        print(f'Subscribed to {streamer_symbols}')
+        
         self = cls({}, streamer, None, streamer_symbols)
 
         self.update_task = asyncio.create_task(self._update_quotes())
@@ -56,7 +56,9 @@ class LivePrices:
 
     async def _update_quotes(self):
         try:
+            print('Listening for quotes...')
             async for e in self.streamer.listen(Quote):
+                print(f'Received quote for {e.eventSymbol}')
                 self.quotes[e.eventSymbol] = e
         except asyncio.CancelledError:
             await self.streamer.unsubscribe_all(Quote)

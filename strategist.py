@@ -120,18 +120,21 @@ class Strategist:
         underlying_symbol: str,
         root_symbol: str,
     ):
-        
+        print('Creating live prices...')
         live_prices = await LivePrices.create(session, [underlying_symbol])
 
         reference_price = (live_prices.quotes[underlying_symbol].bidPrice + live_prices.quotes[underlying_symbol].askPrice) / 2
         print(f'{underlying_symbol} is at {reference_price}')
 
         options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=0)]
+        print(f'Options fetched: {options}')
 
         self = cls(live_prices, underlying_symbol, root_symbol, options)
         
-        # Do an initial run so we have a strategy straight-away. Also populates the LivePrices more than required so we don't have to await it again in the continuous loop
+        print('Starting strategy loop...')
         await self._build_strategy()
+        print('Strategy loop started!')
+        
         # Start the continuous build options loop
         asyncio.create_task(self._run_build_strategy())
         asyncio.create_task(self._run_margin_requirement(session_sandbox, account_sandbox))
@@ -170,6 +173,8 @@ class Strategist:
 
     async def _build_strategy(self, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
         reference_price_locked = self.get_reference_price()
+        print(f'Reference price: {reference_price_locked}')
+        
         lower_options = [option for option in self.options if reference_price_locked - search_interval <= option.strike_price and option.strike_price <= reference_price_locked and option.option_type == OptionType.PUT]
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
         higher_options = [option for option in self.options if reference_price_locked <= option.strike_price and option.strike_price <= reference_price_locked + search_interval and option.option_type == OptionType.CALL]
@@ -185,7 +190,7 @@ class Strategist:
         put_to_sell: Option | None = None
         call_to_sell: Option | None = None
         call_to_buy: Option | None = None
-        # Logic for selecting put and call options based on the price threshold
+        
         for option in lower_options:
             price = self.live_prices.quotes[option.streamer_symbol].bidPrice
             # print(f'PUT price at strike {option.strike_price}: {price}')
@@ -203,7 +208,8 @@ class Strategist:
                 insurance_strike_price = option.strike_price + insurance_offset
                 call_to_buy = next((o for o in higher_options if o.strike_price >= insurance_strike_price), None)
                 break
-        
+
+        print(f'Computed legs: {put_to_buy} {put_to_sell} {call_to_sell} {call_to_buy}')
         try:
             # TODO: Check if position changed and if not don't create new object!
             suggested_position = IronCondor(put_to_buy, put_to_sell, call_to_sell, call_to_buy)
