@@ -6,16 +6,16 @@ from typing import List
 from decimal import Decimal
 from enum import Enum
 
-from tastytrade import DXLinkStreamer
-from tastytrade.dxfeed import Greeks, Quote
 from tastytrade import Session, Account
-from tastytrade.instruments import Option, Equity, OptionType
+from tastytrade.instruments import Option, OptionType
 from tastytrade.instruments import get_option_chain
-from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse
+from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse, PlacedOrder
+from tastytrade.utils import TastytradeError
 
 from lib import TTConfig
 
-from live_prices import LivePrices, TastytradeWrapper
+from live_prices import LivePrices
+from account_updates import AccountUpdates
 
 
 @dataclass
@@ -60,24 +60,29 @@ class IronCondor:
     
 
 class PositionState(Enum):
-
     PENDING = 'position not open yet'
     OPEN = 'position in opened'
+    FILLED = 'position is fully filled'
     CLOSED = 'postition closed'
 
 
 @dataclass
 class PositionManager:
-    position: IronCondor
+    account_updates: AccountUpdates
     state: PositionState = PositionState.PENDING
+    position: IronCondor | None = None
     open_response: PlacedOrderResponse | None = None
     close_response: PlacedOrderResponse | None = None
+
+    def set_position(self, position: IronCondor):
+        self.position = position
     
     # Can raise an exception from the account place_order part
     async def open_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
         order = self.position.opening_order()
         response = await account.a_place_order(session, order, dry_run)
-        self.state = PositionState.OPEN
+        if not dry_run:
+            self.state = PositionState.OPEN
         self.open_response = response
         return response
 
@@ -89,9 +94,8 @@ class PositionManager:
         self.close_response = response
         return response
     
-    # Use this to fully initialize position!
     async def margin_requirement(self, session: Session, account: Account):
-        if self.open_response is None:
+        if self.position is None or self.open_response is None:
             await self.open_position(session, account, dry_run=True)
         return self.open_response.buying_power_effect.change_in_buying_power
     
@@ -99,6 +103,29 @@ class PositionManager:
         if self.open_response is None:
             return None
         return self.open_response.buying_power_effect.change_in_buying_power
+    
+    def open_order(self) -> PlacedOrder:
+        if self.state == PositionState.PENDING:
+            return None
+        order_id = self.open_response.order.id
+        return self.account_updates.orders[order_id]
+
+    def opening_profit(self) -> Decimal:
+        if self.state == PositionState.PENDING:
+            return None
+        legs = self.open_order().legs
+        profit = Decimal('0.0')
+        for leg in legs:
+            # Return None if order is not fully filled
+            if leg.remaining_quantity > Decimal('0.0'):
+                return None
+            for fill in leg.fills:
+                fill_cost = fill.quantity * fill.fill_price
+                if leg.action == OrderAction.BUY_TO_OPEN:
+                    profit -= fill_cost
+                elif leg.action == OrderAction.SELL_TO_OPEN:
+                    profit += fill_cost
+        return profit
 
 
 @dataclass
@@ -120,16 +147,21 @@ class Strategist:
         underlying_symbol: str,
         root_symbol: str,
     ):
-        print('Creating live prices...')
         live_prices = await LivePrices.create(session, [underlying_symbol])
+        print('Initialized live prices')
 
         reference_price = (live_prices.quotes[underlying_symbol].bidPrice + live_prices.quotes[underlying_symbol].askPrice) / 2
         print(f'{underlying_symbol} is at {reference_price}')
 
+        # Blocking call
         options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=0)]
-        print(f'Options fetched: {options}')
+        # print(f'Options fetched: {options}')
 
-        self = cls(live_prices, underlying_symbol, root_symbol, options)
+        account_updates = await AccountUpdates.create(session_sandbox, account_sandbox)
+        position_manager = PositionManager(account_updates)
+        print('Initialized account updates')
+
+        self = cls(live_prices, underlying_symbol, root_symbol, options, position_manager)
         
         print('Starting strategy loop...')
         await self._build_strategy()
@@ -167,9 +199,10 @@ class Strategist:
         return self.live_prices.quotes[self.position_manager.position.call_buy.streamer_symbol].askPrice
     
     async def compute_margin_requirement(self, session: Session, account: Account):
-        if self.position_manager is not None:
+        try:
             await self.position_manager.margin_requirement(session, account)
-
+        except TastytradeError as e:
+            print(f'Could not execute dry-run order. Error {e}')
 
     async def _build_strategy(self, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
         reference_price_locked = self.get_reference_price()
@@ -209,11 +242,10 @@ class Strategist:
                 call_to_buy = next((o for o in higher_options if o.strike_price >= insurance_strike_price), None)
                 break
 
-        print(f'Computed legs: {put_to_buy} {put_to_sell} {call_to_sell} {call_to_buy}')
+        # print(f'Computed legs: {put_to_buy} {put_to_sell} {call_to_sell} {call_to_buy}')
         try:
-            # TODO: Check if position changed and if not don't create new object!
             suggested_position = IronCondor(put_to_buy, put_to_sell, call_to_sell, call_to_buy)
-            self.position_manager = PositionManager(suggested_position)
+            self.position_manager.set_position(suggested_position)
         except Exception as e:
             # No need to set the position_manager to None as it already is per default
             print('Error building and testing order')
