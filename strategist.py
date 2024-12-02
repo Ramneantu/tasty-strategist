@@ -9,7 +9,7 @@ from enum import Enum
 from tastytrade import Session, Account
 from tastytrade.instruments import Option, OptionType
 from tastytrade.instruments import get_option_chain
-from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse, PlacedOrder
+from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse, PlacedOrder, OrderStatus
 from tastytrade.utils import TastytradeError
 
 from lib import TTConfig
@@ -60,10 +60,11 @@ class IronCondor:
     
 
 class PositionState(Enum):
-    PENDING = 'position not open yet'
-    OPEN = 'position in opened'
-    FILLED = 'position is fully filled'
-    CLOSED = 'postition closed'
+    PENDING = 'no order submitted'
+    OPENING_REQUESTED = 'opening order submitted'
+    OPEN = 'position is open'
+    CLOSING_REQUESTED = 'closing order submitted'
+    CLOSED = 'postition was closed'
 
 
 @dataclass
@@ -81,17 +82,25 @@ class PositionManager:
     async def open_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
         order = self.position.opening_order()
         response = await account.a_place_order(session, order, dry_run)
-        if not dry_run:
-            self.state = PositionState.OPEN
         self.open_response = response
+        if not dry_run:
+            self.state = PositionState.OPENING_REQUESTED
+            # Wait until order is filled
+            while not self.is_open_order_filled():
+                await asyncio.sleep(0.2)
+            self.state = PositionState.OPEN
         return response
 
     # Can raise an exception from the account place_order part
     async def close_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
         order = self.position.closing_order()
         response = await account.a_place_order(session, order, dry_run)
-        self.state = PositionState.CLOSED
         self.close_response = response
+        if not dry_run:
+            self.state = PositionState.CLOSING_REQUESTED
+            while not self.is_close_order_filled():
+                await asyncio.sleep(0.2)
+            self.state = PositionState.CLOSED
         return response
     
     async def margin_requirement(self, session: Session, account: Account):
@@ -104,19 +113,39 @@ class PositionManager:
             return None
         return self.open_response.buying_power_effect.change_in_buying_power
     
-    def open_order(self) -> PlacedOrder:
+    def get_open_order(self) -> PlacedOrder:
         if self.state == PositionState.PENDING:
             return None
         order_id = self.open_response.order.id
+        # Order update not received yet
+        if order_id not in self.account_updates.orders:
+            return self.open_response.order
+        # Getting live status
         return self.account_updates.orders[order_id]
+    
+    def get_close_order(self) -> PlacedOrder:
+        if self.state not in [PositionState.CLOSING_REQUESTED, PositionState.CLOSED]:
+            return None
+        order_id = self.close_response.order.id
+        # Order update not received yet
+        if order_id not in self.account_updates.orders:
+            return self.close_response.order
+        # Getting live status
+        return self.account_updates.orders[order_id]
+    
+    def is_open_order_filled(self):
+        return self.get_open_order() is not None and self.get_open_order().status == OrderStatus.FILLED
+    
+    def is_close_order_filled(self):
+        return self.get_close_order() is not None and self.get_close_order().status == OrderStatus.FILLED
 
     def opening_profit(self) -> Decimal:
-        if self.state == PositionState.PENDING:
+        if self.state == PositionState.PENDING or not self.is_open_order_filled():
             return None
-        legs = self.open_order().legs
+        legs = self.get_open_order().legs
         profit = Decimal('0.0')
         for leg in legs:
-            # Return None if order is not fully filled
+            # Return None if order is not fully filled. Should not happen as we check at the start
             if leg.remaining_quantity > Decimal('0.0'):
                 return None
             for fill in leg.fills:
