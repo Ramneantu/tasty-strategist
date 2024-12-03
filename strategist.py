@@ -329,6 +329,9 @@ async def main():
     margin_label = tk.Label(root, text="Margin: -", font=("Helvetica", 30))
     margin_label.pack(pady=10)
     
+    positions_label = tk.Label(root, text="Open Positions: 0", font=("Helvetica", 20))
+    positions_label.pack(pady=10)
+    
     order_button = tk.Button(root, text="Open Order", bg="green", fg="black", font=("Helvetica", 20))
     order_button.pack(pady=10)
 
@@ -366,6 +369,11 @@ async def main():
                         call_to_sell_label.config(
                             text=f"Call to Sell ({strategist.position_manager.position.call_sell.symbol}): "
                                  f"${strategist.get_call_to_sell_price()}"
+                        )
+                    if strategist.positions:
+                        positions_label.config(
+                            text=f"Open Positions: "
+                                 f"{len(strategist.positions)}"
                         )
                     margin_label.config(
                         text=f"Margin required: {(f'${strategist.position_manager.margin_requirement_no_wait():.2f}') if strategist.position_manager.margin_requirement_no_wait() is not None else 'N/A'}"
