@@ -335,14 +335,17 @@ async def main():
     order_button = tk.Button(root, text="Open Order", bg="green", fg="black", font=("Helvetica", 20))
     order_button.pack(pady=10)
 
-    def toggle_order(strategist: Strategist):
+    async def toggle_order(strategist: Strategist):
         current_text = order_button.cget("text")
         if current_text == "Open Order":
+            await strategist.position_manager.open_position(strategist.session_sandbox, strategist.sandbox_account, dry_run=False)
             order_button.config(text="Close Order", bg="red")
         else:
+            await strategist.position_manager.close_position(strategist.session_sandbox, strategist.sandbox_account, dry_run=False)
             order_button.config(text="Open Order", bg="green")
 
-    order_button.config(command=lambda: toggle_order(strategist))
+    # Change the button command to use asyncio.create_task
+    order_button.config(command=lambda: asyncio.create_task(toggle_order(strategist)))
 
 
     async def update_winnings(tick_interval: float = 0.1):
@@ -370,7 +373,7 @@ async def main():
                             text=f"Call to Sell ({strategist.position_manager.position.call_sell.symbol}): "
                                  f"${strategist.get_call_to_sell_price()}"
                         )
-                    if strategist.positions:
+                    if strategist.positions is not None:
                         positions_label.config(
                             text=f"Open Positions: "
                                  f"{len(strategist.positions)}"
