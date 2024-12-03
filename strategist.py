@@ -7,6 +7,7 @@ from decimal import Decimal
 from enum import Enum
 
 from tastytrade import Session, Account
+from tastytrade.account import CurrentPosition
 from tastytrade.instruments import Option, OptionType
 from tastytrade.instruments import get_option_chain
 from tastytrade.order import NewOrder, OrderAction, OrderTimeInForce, OrderType, PlacedOrderResponse, PlacedOrder, OrderStatus
@@ -164,7 +165,9 @@ class Strategist:
     root_symbol: str
     options: List[Option]
     position_manager: PositionManager | None = None
-    margin: float | None = None
+    sandbox_account: Account | None = None
+    session_sandbox: Session | None = None
+    positions: List[CurrentPosition] | None = None
 
 
     @classmethod
@@ -190,7 +193,7 @@ class Strategist:
         position_manager = PositionManager(account_updates)
         print('Initialized account updates')
 
-        self = cls(live_prices, underlying_symbol, root_symbol, options, position_manager)
+        self = cls(live_prices, underlying_symbol, root_symbol, options, position_manager, account_sandbox, session_sandbox)
         
         print('Starting strategy loop...')
         await self._build_strategy()
@@ -275,6 +278,7 @@ class Strategist:
         try:
             suggested_position = IronCondor(put_to_buy, put_to_sell, call_to_sell, call_to_buy)
             self.position_manager.set_position(suggested_position)
+            self.positions = await self.sandbox_account.a_get_positions(self.session_sandbox)
         except Exception as e:
             # No need to set the position_manager to None as it already is per default
             print('Error building and testing order')

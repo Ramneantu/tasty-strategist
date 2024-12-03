@@ -58,7 +58,6 @@ class LivePrices:
         try:
             print('Listening for quotes...')
             async for e in self.streamer.listen(Quote):
-                print(f'Received quote for {e.eventSymbol}')
                 self.quotes[e.eventSymbol] = e
         except asyncio.CancelledError:
             await self.streamer.unsubscribe_all(Quote)
