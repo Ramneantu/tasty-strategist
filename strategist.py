@@ -183,7 +183,7 @@ class Strategist:
         print(f'{underlying_symbol} is at {reference_price}')
 
         # Blocking call
-        options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=0)]
+        options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=3)]
         # print(f'Options fetched: {options}')
 
         account_updates = await AccountUpdates.create(session_sandbox, account_sandbox)
@@ -324,6 +324,19 @@ async def main():
 
     margin_label = tk.Label(root, text="Margin: -", font=("Helvetica", 30))
     margin_label.pack(pady=10)
+    
+    order_button = tk.Button(root, text="Open Order", bg="green", fg="black", font=("Helvetica", 20))
+    order_button.pack(pady=10)
+
+    def toggle_order(strategist: Strategist):
+        current_text = order_button.cget("text")
+        if current_text == "Open Order":
+            order_button.config(text="Close Order", bg="red")
+        else:
+            order_button.config(text="Open Order", bg="green")
+
+    order_button.config(command=lambda: toggle_order(strategist))
+
 
     async def update_winnings(tick_interval: float = 0.1):
         try:
