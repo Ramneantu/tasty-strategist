@@ -162,9 +162,9 @@ class PositionManager:
                 return None
             for fill in leg.fills:
                 fill_cost = fill.quantity * fill.fill_price
-                if leg.action == OrderAction.BUY_TO_OPEN:
+                if leg.action in [OrderAction.BUY_TO_OPEN, OrderAction.BUY_TO_CLOSE]:
                     profit -= fill_cost
-                elif leg.action == OrderAction.SELL_TO_OPEN:
+                elif leg.action in [OrderAction.SELL_TO_OPEN, OrderAction.SELL_TO_CLOSE]:
                     profit += fill_cost
         profit = profit * Decimal('100.0')
         return profit
@@ -179,6 +179,7 @@ class PositionManager:
         legs = self.get_open_order().legs
         profit = self._calculate_buying_power_effect(legs)
         self.buying_power_effect_open = profit
+        print(f'Opened position for ${profit}')
         return profit
     
     def get_buying_power_effect_close(self) -> Decimal:
@@ -189,6 +190,7 @@ class PositionManager:
         legs = self.get_close_order().legs
         profit = self._calculate_buying_power_effect(legs)
         self.buying_power_effect_close = profit
+        print(f'Closed position for ${profit}')
         return profit
 
 
@@ -218,7 +220,7 @@ class Strategist:
         print(f'{underlying_symbol} is at {reference_price}')
 
         # Blocking call
-        options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=1)]
+        options = get_option_chain(session_sandbox, root_symbol)[date.today() + timedelta(days=0)]
         # print(f'Options fetched: {options}')
 
         account_updates = await AccountUpdates.create(session_sandbox, account_sandbox)
@@ -276,7 +278,7 @@ class Strategist:
 
     async def _build_strategy(self, search_interval: int = 500, price_threshold: float = 3.5, insurance_offset: int = 30):
         reference_price_locked = self.get_reference_price()
-        print(f'Reference price: {reference_price_locked}')
+        # print(f'Reference price: {reference_price_locked}')
         
         lower_options = [option for option in self.options if reference_price_locked - search_interval <= option.strike_price and option.strike_price <= reference_price_locked and option.option_type == OptionType.PUT]
         lower_options.sort(key=lambda o: o.strike_price, reverse=True)
@@ -328,7 +330,7 @@ class Strategist:
         # Return None if position is not closed
         if self.buying_power_effect_open() is None or self.buying_power_effect_close() is None:
             return None
-        self.buying_power_effect_open() + self.buying_power_effect_close()
+        return self.buying_power_effect_open() + self.buying_power_effect_close()
 
     def estimated_buying_power_effect(self):
         # Return None if position is not open

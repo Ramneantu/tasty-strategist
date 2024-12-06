@@ -49,7 +49,7 @@ class AccountUpdates:
     async def _update_positions(self):
         try:
             async for e in self.streamer.listen(CurrentPosition):
-                self.orders[e.symbol] = e
+                self.positions[e.symbol] = e
         except asyncio.CancelledError:
             # Maybe we need some cleanup here?
             raise asyncio.CancelledError
