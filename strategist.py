@@ -90,6 +90,10 @@ class PositionManager:
         self.position = position
         self.state = PositionState.PENDING
     
+    @staticmethod
+    def print_order_summary(order: PlacedOrder):
+        print(f'Order Summary: {order}')
+
     # Can raise an exception from the account place_order part
     async def open_position(self, session: Session, account: Account, dry_run=True) -> PlacedOrderResponse:
         order = self.position.opening_order()
@@ -100,6 +104,7 @@ class PositionManager:
             # Wait until order is filled
             while not self.is_open_order_filled():
                 await asyncio.sleep(0.2)
+            self.print_order_summary(self.get_open_order())
             self.state = PositionState.OPEN
         return response
 
@@ -112,6 +117,7 @@ class PositionManager:
             self.state = PositionState.CLOSING_REQUESTED
             while not self.is_close_order_filled():
                 await asyncio.sleep(0.2)
+            self.print_order_summary(self.get_close_order())
             self.state = PositionState.CLOSED
         return response
     
@@ -179,7 +185,7 @@ class PositionManager:
         legs = self.get_open_order().legs
         profit = self._calculate_buying_power_effect(legs)
         self.buying_power_effect_open = profit
-        print(f'Opened position for ${profit}')
+        # print(f'Opened position for ${profit}')
         return profit
     
     def get_buying_power_effect_close(self) -> Decimal:
@@ -190,7 +196,7 @@ class PositionManager:
         legs = self.get_close_order().legs
         profit = self._calculate_buying_power_effect(legs)
         self.buying_power_effect_close = profit
-        print(f'Closed position for ${profit}')
+        # print(f'Closed position for ${profit}')
         return profit
 
 
