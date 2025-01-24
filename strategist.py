@@ -222,7 +222,7 @@ class Strategist:
         live_prices = await LivePrices.create(session, [underlying_symbol])
         print('Initialized live prices')
 
-        reference_price = (live_prices.quotes[underlying_symbol].bidPrice + live_prices.quotes[underlying_symbol].askPrice) / 2
+        reference_price = (live_prices.quotes[underlying_symbol].bid_price + live_prices.quotes[underlying_symbol].ask_price) / 2
         print(f'{underlying_symbol} is at {reference_price}')
 
         # Blocking call
@@ -256,25 +256,25 @@ class Strategist:
             await asyncio.sleep(update_interval)
 
     def get_reference_price(self):
-        return (self.live_prices.quotes[self.underlying_symbol].bidPrice + self.live_prices.quotes[self.underlying_symbol].askPrice) / 2
+        return (self.live_prices.quotes[self.underlying_symbol].bid_price + self.live_prices.quotes[self.underlying_symbol].ask_price) / 2
     
     # The put we sell
     def get_main_put_price(self, buy=False):
         quote = self.live_prices.quotes[self.position_manager.position.main_put.streamer_symbol]
-        return quote.askPrice if buy else quote.bidPrice
+        return quote.ask_price if buy else quote.bid_price
     
     # The put we buy
     def get_insurance_put_price(self, buy=True):
         quote = self.live_prices.quotes[self.position_manager.position.insurance_put.streamer_symbol]
-        return quote.askPrice if buy else quote.bidPrice
+        return quote.ask_price if buy else quote.bid_price
     
     def get_main_call_price(self, buy=False):
         quote = self.live_prices.quotes[self.position_manager.position.main_call.streamer_symbol]
-        return quote.askPrice if buy else quote.bidPrice
+        return quote.ask_price if buy else quote.bid_price
     
     def get_insurance_call_price(self, buy=True):
         quote = self.live_prices.quotes[self.position_manager.position.insurance_call.streamer_symbol]
-        return quote.askPrice if buy else quote.bidPrice
+        return quote.ask_price if buy else quote.bid_price
     
     async def compute_margin_requirement(self, session: Session, account: Account):
         try:
@@ -303,7 +303,7 @@ class Strategist:
         call_to_buy: Option | None = None
         
         for option in lower_options:
-            price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+            price = self.live_prices.quotes[option.streamer_symbol].bid_price
             # print(f'PUT price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 put_to_sell = option
@@ -312,7 +312,7 @@ class Strategist:
                 break
         
         for option in higher_options:
-            price = self.live_prices.quotes[option.streamer_symbol].bidPrice
+            price = self.live_prices.quotes[option.streamer_symbol].bid_price
             # print(f'CALL price at strike {option.strike_price}: {price}')
             if price < price_threshold:
                 call_to_sell = option

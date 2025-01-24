@@ -20,7 +20,7 @@ class AccountUpdates:
         session: Session,
         account: Account
     ):
-        streamer = await AlertStreamer.create(session)
+        streamer = await AlertStreamer(session)
         await streamer.subscribe_accounts([account])
 
         self = cls(streamer, {}, {})

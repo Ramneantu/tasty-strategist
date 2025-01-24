@@ -40,7 +40,7 @@ class LivePrices:
         session: Session,
         streamer_symbols: list[str],
     ):
-        streamer = await DXLinkStreamer.create(session)
+        streamer = await DXLinkStreamer(session)
         await streamer.subscribe(Quote, streamer_symbols)
         print(f'Subscribed to {streamer_symbols}')
         
@@ -58,7 +58,7 @@ class LivePrices:
         try:
             print('Listening for quotes...')
             async for e in self.streamer.listen(Quote):
-                self.quotes[e.eventSymbol] = e
+                self.quotes[e.event_symbol] = e
         except asyncio.CancelledError:
             await self.streamer.unsubscribe_all(Quote)
             await self.streamer.close()
