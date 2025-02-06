@@ -6,8 +6,8 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tastystrategist"
-version = "0.1.1"
+name = "tasty-strategist"
+version = "0.1.2"
 description = "A trading assistant for executing a strategy"
 readme = "README.md"
 license = {text = "MIT License"}
