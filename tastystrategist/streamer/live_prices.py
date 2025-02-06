@@ -6,7 +6,8 @@ from tastytrade.dxfeed import Greeks, Quote
 from tastytrade import Session
 from tastytrade.instruments import Option, Equity
 
-from lib import TTConfig, TTOption, TTOptionSide
+from TTOrder import TTOption, TTOptionSide
+from TTConfig import TTConfig
 
 
 class TastytradeWrapper:

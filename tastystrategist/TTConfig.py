@@ -12,7 +12,7 @@ class TTConfig:
     cert_wss: str = None
     prod_wss: str = None
 
-    def __init__(self, path: str = "./config", filename: str = "tt.config") -> None:
+    def __init__(self, path: str = "./utils", filename: str = "tt.config") -> None:
         self.config.read(f"{path}/{filename}")
         self.use_prod = self.config.get("Config", "use_prod") in (
             "True",

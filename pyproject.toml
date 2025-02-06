@@ -1,0 +1,25 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",  # Using a recent version that supports PEP 621 metadata.
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tastystrategist"
+version = "0.1.0"
+description = "A trading assistant for executing a strategy"
+readme = "README.md"
+license = {text = "MIT License"}
+authors = [
+    {name = "Emanuel Ramneantu", email = "ramneantu.emanuel@gmail.com"}
+]
+maintainers = [
+    {name = "Cosmin Vlaicu", email = "c.vlaicu17@gmail.com"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "tk",
+    "tastytrade"
+]
+
