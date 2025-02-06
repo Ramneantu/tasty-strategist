@@ -4,6 +4,9 @@ TastyBot.config
 logs/
 lib/__pycache__/
 
+# Mac Finder
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
