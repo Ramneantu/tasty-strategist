@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tastystrategist"
-version = "0.1.0"
+version = "0.1.1"
 description = "A trading assistant for executing a strategy"
 readme = "README.md"
 license = {text = "MIT License"}
@@ -19,7 +19,6 @@ maintainers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "tk",
     "tastytrade"
 ]
 
